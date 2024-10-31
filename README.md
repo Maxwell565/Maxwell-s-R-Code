@@ -1,0 +1,1 @@
+The code in this repository is for a malaria project conducted between 2023 and 2024, it includes data importation, exploration, summarization, visualisation, inferential stats, joining (left join) among others
