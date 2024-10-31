@@ -1,0 +1,597 @@
+---
+title: "RSA Drug and diagnostic resistance analysis: May 2024 Workshop_Maxwell RSA"
+date: "`r Sys.Date()`"
+output: 
+  word_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+# Introduction
+
+During the first two days of this workshop, we will be analysing epidemiological and genomic data generated as part of the regional GenE8 project to produce descriptive statistics and data vizualizations of drug resistance markers, which will be included in draft manuscripts and conference abstracts.
+
+### This document provides a template for you to carry out the following:
+
+-   Loading genomic and epidemiological data into R, filtering the data to focus on your country's data, and joining epidemiological and genomic data into one dataset
+-   Calculating the proportions and 95% confidence intervals of different drug resistance genotypes for S, P, SP, and the prevalence of different Plasmodium species :
+
+1.  Overall, for both residents and non-residents
+2.  Stratified by province, for residents
+3.  Stratified by travel history
+4.  Stratified by age
+5.  Stratified by gender
+
+-   Calculate the proportions of mutant vs wild-type alleles for SNPs at the following loci: k13_441 and k13_574 (Artemisinin), crt_76 (chloroquine), mdr1_86 (Lumefantrine)
+
+1.  Overall, for both residents and non-residents
+2.  Stratified by province, for residents
+3.  Stratified by travel history
+4.  Stratified by age
+5.  Stratified by gender
+
+-   Produce an overall plot of the proportions of mutant vs wild-type alleles for SNPs at the following loci: k13_441 and k13_574 (Artemisinin), crt_76 (chloroquine), mdr1_86 (Lumefantrine) and genotypes for S, P, and SP, with 95% confidence intervals.
+
+-   Produce the following plots for each of S, P, SP, species and following SNP loci k13_441, k13_574 (Artemisinin), crt_76 (Chloroquine), mdr1_86 (Lumefantrine) :
+
+1.  Stacked barchart showing counts of samples by province (residents) and genotype/allele
+2.  Stacked barchart showing proportions (prevalence) of samples by province (residents) and genotype/allele
+3.  Stacked barchart showing the counts (prevalence) of samples by travel history
+4.  Stacked barchart showing the counts (prevalence) of samples by age group
+5.  Stacked barchart showing the counts (prevalence) of samples by health facility
+6.  Stacked barchart showing the counts (prevalence) of samples by gender
+
+# Set-up
+
+To get started, we will run code to load the required packages. These should have been installed prior to the workshop. If you don't have one of the packages you will get an error message and can install them using the two commented out lines of code: `devtools::install_github("forestgeo/fgeo.misc")` and `install.packages(c("tidyverse", "gtsummary", "ggpubr", "readxl","kableExtra"))`
+
+```{r setup, verbose = FALSE, error = FALSE, message = FALSE}
+## Global options
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, verbose = FALSE, error = FALSE, message = FALSE, warning = FALSE)
+
+# Run this code to install packages
+#devtools::install_github("forestgeo/fgeo.misc")
+#install.packages(c("tidyverse", "gtsummary", "ggpubr", "readxl","kableExtra","stringr"))
+
+# libraries
+library(fgeo.misc)
+library(tidyverse)
+library(gtsummary)
+library(ggpubr)
+library(readxl)
+library(kableExtra)
+library(stringr)
+
+
+```
+
+# Country-specific variables and filepaths
+
+This code sets the specific variables for your country data. In order to do this, the filepaths will need to be changed to where you have put your data (this should be the location of the project you created, the desktop folder named "Workshop_May_2024"). This will likely be the result of running "getwd()" if you are working within the project we created earlier. To find the filepath, you can navigate in R Studio to the folder where the data are stored and then click "More" \> "Set As Working Directory".
+
+```{r}
+
+# Define the path for all files that will be needed 
+all_data_path <- "C:/Users/maxwellm/Desktop/Workshop analyses/Workshop_May_2024" 
+# CHANGE THIS TO THE CORRESPONDING DIRECTORY
+
+# Define the path for the epi data
+#CHANGE FILE NAME
+clean_epi_data_path<-file.path(all_data_path,"SOUTH_AFRICA_EPI_clean.xlsx") 
+
+# Define country code (used to define resident vs non_resident, link provinces to geographical coordinates) 
+# CHANGE COUNTRY CODE:
+# 1: angola; 3: eswatini; 5: namibia; 6: south africa; 7: zambia
+country_code<-6  
+
+
+# Define the path to the genomic export
+# CHANGE FILENAME
+genomic_data_path = file.path(all_data_path,"SA_genomic.csv")
+
+
+
+```
+
+# Loading data
+
+Next, we will load and inspect epidemiological, genomic and data dictionary data. In order to do this, the filepaths will need to be changed to where you have put your data. This will likely be the result of running "getwd()" if you are working within the project we set up as a group earlier.
+
+```{r}
+# Load clean epi data into variable epi_data
+if(tools::file_ext(clean_epi_data_path)=="xlsx"){
+  epi_data<-read_xlsx(clean_epi_data_path, na = c("","NA","NULL",NULL, "null"))  
+}else{
+  epi_data<-read_xlsx(clean_epi_data_path, na = c("","NA","NULL",NULL, "null"))
+}
+
+# Output the first rows in epi_data to evaluate visually
+kable(head(epi_data))
+
+table(epi_data$health_facility)
+# load genomic data into variable GENOMIC_EXPORTS_MASTER
+GENOMIC_EXPORTS_MASTER <- read_csv(genomic_data_path,
+                                   na = c("NA","NULL",NULL, "null")) 
+
+# Output the first rows in GENOMIC_EXPORTS_MASTER to evaluate visually
+kable(head(GENOMIC_EXPORTS_MASTER))
+
+# load lookup table that has the coordinates for each province center
+E8_Provinces <- read_excel(file.path(all_data_path,"E8_Provinces.xlsx"))
+
+# Output the first rows in E8_Provinces to evaluate visually
+kable(head(E8_Provinces))
+
+# load data dictionary
+ANGOLA_NAMIBIA_ZAMBIA_DATA_DICTIONARY <- read_excel(file.path(all_data_path,"ANGOLA NAMIBIA ZAMBIA DATA DICTIONARY.xlsx"))
+```
+
+# Data merging and re-coding
+
+Now we will merge epi and genomic data and check the new dataset. Here you will need to select columns to include in the dataset using the `select()` function which selects particular columns within the dataset.You also will use the `mutate()` function to re-code the `age`, `travel_history`,`gender` variables from a code to text. Finally `inner_join()` is used to join the genomic and epidemiogical data by matching the sample ids `FieldID` and `participant_id`.
+
+```{r}
+
+# Standardize health facility variable (e.g. in SA epi data it is called differently)
+if("health_facility" %in% names(epi_data) == FALSE){
+  epi_data$health_facility<-epi_data$`form facility`
+}
+
+# From epi data, select columns that contain key variables to get a smaller table 
+cleaned_key_vars<-epi_data %>% 
+  select(contains(" age"), 
+         contains("country"),
+         contains(" gender"), 
+         contains("night_away"), 
+         contains("date_diagnosis"),
+         contains("province"), 
+         "health_facility",
+         "form participant_id")
+
+
+# Recode province variables (the database has numbers and we want names from the E8_Provinces table
+cleaned_key_vars<-cleaned_key_vars %>% 
+  mutate(province = recode(`form section2 residence_province`, 
+                           lookup(E8_Provinces$pid, E8_Provinces$pname)))
+
+# Print the column names to check that the selected variables are the ones we wanted
+colnames(cleaned_key_vars)
+
+# Recode age variable (from numbers to ranges)
+cleaned_key_vars$`form section2 age`<- as.character(cleaned_key_vars$`form section2 age`)
+cleaned_key_vars<-cleaned_key_vars %>% mutate(age = case_match(`form section2 age`,
+                                                               "1" ~ "<5",
+                                                               "2" ~ "5-14",
+                                                               "3" ~ "15-24",
+                                                               "4" ~ "25-39",
+                                                               "5" ~ "40-59",
+                                                               "6" ~ "60+",
+                                                               .default = NA))
+# Recode travel history variable (from numbers to Travel/No Travel)
+cleaned_key_vars$`form section2 night_away`<- as.character(cleaned_key_vars$`form section2 night_away`)
+cleaned_key_vars<-cleaned_key_vars %>% mutate(travel_history = case_match(`form section2 night_away`,
+                                                                          "1" ~ "Travel",
+                                                                          "2" ~ "No Travel",
+                                                                          .default = NA))
+
+# Recode gender (from numbers to gender)
+cleaned_key_vars$`form section2 gender`<- as.character(cleaned_key_vars$`form section2 gender`)
+cleaned_key_vars<-cleaned_key_vars %>% mutate(gender = case_match(`form section2 gender`,
+                                                                  "1" ~ "Male",
+                                                                  "2" ~ "Female",
+                                                                  "98" ~ "Prefer not to say",
+                                                                  "99" ~ "Missing",
+                                                                  .default = NA))
+
+
+# Note from developers: we still need to fix entries with 555 code for province
+# print any entries with codes not found in the E8_Provinces table
+print("These province codes show in the data but not in the E8_Provinces table")
+cleaned_key_vars$`form section2 residence_province`[cleaned_key_vars$`form section2 residence_province` %in% E8_Provinces$pid == FALSE]
+
+# Select columns we want to plot from the genomic output: S, P, SP genotypes and  k13_441 and k13_574 (Artemisinin), crt_76 (chloroquine), mdr1_86 (Lumefantrine, although debatable) :
+GENOMIC_EXPORTS_MASTER<-GENOMIC_EXPORTS_MASTER %>% select(c("FieldID", "S_Genotype", "P_Genotype", "SP_Genotype","Species_Genotype", "k13_441","k13_574", "crt_76", "mdr1_86"))
+
+# Set undet (not enough read to get a genotype call) to NA
+GENOMIC_EXPORTS_MASTER[GENOMIC_EXPORTS_MASTER == "undet"] <-NA
+
+
+# Merge the epi and genomic data: join by unique id. inner join will remove entries for either that don't have a match
+genomic_data<-inner_join(GENOMIC_EXPORTS_MASTER, cleaned_key_vars, by = c("FieldID" = "form participant_id"))
+
+
+# Rename genotypes and alleles for figure legents and labels
+genomic_data<-genomic_data %>%
+  mutate(k13_441 = recode(k13_441, "L" = 'Mutant', "P"= 'Wild Type', "L+P" =  'Mixed'),
+         k13_441 = factor(k13_441,levels = c("Wild Type", "Mixed","Mutant")),
+         k13_574 = recode(k13_574, "L" = 'Mutant', "P"= 'Wild Type', "L+P" =  'Mixed'),
+         k13_574 = factor(k13_574,levels = c("Wild Type", "Mixed","Mutant")),
+         crt_76 = recode(crt_76, "T" = 'Mutant', "K"= 'Wild Type', "K+T" =  'Mixed'),
+         crt_76 = factor(crt_76,levels = c("Wild Type", "Mixed","Mutant")),
+         mdr1_86 = recode(mdr1_86, "Y" = 'Mutant', "N"= 'Wild Type', "Y+N" =  'Mixed' ),
+         mdr1_86 = factor(mdr1_86,levels = c("Wild Type", "Mixed","Mutant")),
+         P_Genotype =  recode(P_Genotype, "sens" = 'Sensitive', 
+                              "less_sens"= 'Less sensitive',
+                              "triple" =  'Triple',
+                              "quadruple" = 'Quadruple',
+                              "undet_poly" = "Polyclonal undetermined"),
+         P_Genotype = factor(P_Genotype,levels = c("Sensitive","Less sensitive", "Triple","Quadruple","Polyclonal undetermined")),
+         S_Genotype =  recode(S_Genotype, "sens" = 'Sensitive', 
+                              "less_sens"= 'Less sensitive',
+                              "triple" =  'Triple',
+                              "double" = 'Double',
+                              "undet_poly" = "Polyclonal undetermined" ),
+         S_Genotype = factor(S_Genotype,levels = c("Sensitive","Less sensitive", "Double","Triple","Polyclonal undetermined")),
+         SP_Genotype =  recode(SP_Genotype, "sens" = 'Sensitive', 
+                               "less_sens"= 'Less sensitive',
+                               "quintuple" =  'Quintuple',
+                               "sextuple" = 'Sextuple',
+                               "undet_poly" = "Polyclonal undetermined"),
+         SP_Genotype = factor(SP_Genotype,levels = c("Sensitive","Less sensitive", "Quintuple","Sextuple","Polyclonal undetermined")),
+         Species_Genotype =  recode(Species_Genotype, "pf" = 'P. falciparum', 
+                                    "pfpow"= 'P. falciparum + P. ovale wallikeri',
+                                    "pfpoc" =  'P. falciparum + P. ovale curtisi',
+                                    "pfpm" = 'P. falciparum + P. malariae',
+                                    "pfpv" = "P. falciparum + P. vivax")
+         
+  ) %>% 
+  rename(pfdhfr=P_Genotype,pfdhps=S_Genotype,`pfdhfr+pfdhps`=SP_Genotype,`Plasmodium species`=Species_Genotype,`pfk13 P441L` = k13_441,`pfk13 P574L` = k13_574,`pfmdr1 N86Y` = mdr1_86,`pfcrt K76T` = crt_76)
+
+
+kable(head(genomic_data))
+
+# create separate datasets for residents and non-residents
+residents<-genomic_data %>% filter(`form section2 residence_country` == country_code )
+#non_residents<-genomic_data %>% filter(`form section2 residence_country` != country_code )
+
+non_residents <- genomic_data %>% filter(is.na(`form section2 residence_country`))
+
+
+# Define the variables (genotypes) that we will make figures for:
+genotypes_to_include = c("pfdhfr","pfdhps","pfdhfr+pfdhps","Plasmodium species",
+                         "pfk13 P441L","pfk13 P574L","pfmdr1 N86Y","pfcrt K76T")
+
+```
+
+# Generating tables
+
+Next, we will generating the following tables:
+
+1.  Distribution of samples by province (residents)
+2.  Distribution of samples by province (residents of other countries)
+3.  Prevalence of resistance genotypes, SNPs and species composition
+4.  Prevalence of resistance genotypes, SNPs and species composition (residents)
+5.  Prevalence of resistance genotypes, SNPs and species composition (non-residents)
+6.  Prevalence of resistance genotypes, SNPs and species composition by travel history
+7.  Prevalence of resistance genotypes, SNPs and species composition by province (residents)
+8.  Prevalence of resistance genotypes, SNPs and species composition by gender
+9.  Prevalence of resistance genotypes, SNPs and species composition by age
+10. Prevalence of resistance genotypes, SNPs and species composition by health facility (residents)
+
+```{r, warning=FALSE, error=FALSE, verbose = FALSE, message = FALSE}
+
+# Each group of code within this chunk makes summary tables with numbers in different categories and with confidence intervals where specified. See the caption to understand what's each. 
+
+tbl_summary(residents, include = c('province')) %>% add_n() %>% 
+  modify_header(label = "All residents") %>%
+  modify_caption("**Table 1. Distribution of samples by province (residents)**") 
+
+#Resident country is 6(SA) or NA in the genomic data (?NA is other countries) 
+
+tbl_summary(non_residents, include = c('province')) %>% add_n() %>%
+ modify_header(label = "All non-residents") %>%
+  modify_caption("**Table 2. Distribution of samples by province (residents of other countries)**") 
+
+
+# Make table of DR prevalences overall
+genomic_data %>%  tbl_summary(include= genotypes_to_include,missing = "no") %>% add_n() %>% 
+  modify_header(label = "Resistance Marker")%>%
+  modify_caption("**Table 3. Prevalence of resistance genotypes and species composition**") %>%
+  add_ci()
+
+
+residents %>%  tbl_summary(include= genotypes_to_include,missing = "no") %>% add_n() %>% 
+  modify_header(label = "Resistance Marker")%>%
+  modify_caption("**Table 4. Prevalence of resistance genotypes and species composition (residents)**") %>%
+  add_ci()
+
+non_residents %>%  tbl_summary(include= genotypes_to_include,missing = "no") %>% add_n() %>% 
+ modify_header(label = "Resistance Marker")%>%
+  modify_caption("**Table 5. Prevalence of resistance genotypes and species composition (non-residents)**") %>%
+  add_ci()
+
+# travelers 
+genomic_data %>%  tbl_summary(include= genotypes_to_include, by= "travel_history",missing = "no") %>% add_n() %>% 
+  modify_header(label = "Resistance Marker")%>%
+  modify_caption("**Table 6. Prevalence of resistance genotypes and species composition by travel history**") %>%
+  add_ci()
+
+# Make table of DR prevalences by province
+#residents %>% 
+ # tbl_summary(include= genotypes_to_include, by = "province",missing = "no") %>% add_n() %>% 
+  #modify_header(label = "Resistance Marker")%>% 
+  #modify_caption("**Table 7. Prevalence of resistance genotypes and species composition by province (residents)**") %>%
+  #add_ci()
+
+# table of DR prevalences by gender (by province?)
+genomic_data %>% 
+  tbl_summary(include= genotypes_to_include, by = c("gender"),missing = "no") %>% add_n() %>% 
+  modify_header(label = "Resistance Marker") %>%
+  modify_caption("**Table 8. Prevalence of resistance genotypes and species composition by gender**") %>%
+  add_ci()
+
+# table of DR prevalences by age (why does age not run for RSA)
+#genomic_data %>% 
+ # tbl_summary(include= genotypes_to_include, by = c("age"),missing = "no") %>% add_n() %>% 
+  #modify_header(label = "Resistance Marker") %>%
+  #modify_caption("**Table 9. Prevalence of resistance genotypes and species composition by age**") %>%
+  #add_ci()
+
+
+# FOR NAMIBIA WE MAY NEED TO FILTER OUT HAKUMOTO
+#residents %>% 
+ # group_by(health_facility) %>% 
+  #filter(n()>5) %>% 
+  #tbl_summary(include= genotypes_to_include, by = "health_facility",missing = "no") %>% add_n() %>% 
+  #modify_header(label = "Resistance Marker")%>% 
+  #modify_caption("*Table 10. Prevalence of resistance genotypes and species composition by health facility (residents)*") %>%
+  #add_ci()
+
+```
+
+# Producing plots
+
+First, we will produce a grouped barchart which vizualises the proportions of mutant vs wild-type alleles for SNPs at the following loci: k13_441 and k13_574 (Artemisinin), crt_76 (chloroquine), mdr1_86 (Lumefantrine) and genotypes for S, P, and SP.
+
+```{r, warning=FALSE, error=FALSE, fig.width=10, fig.height=10, fig.fullwidth=TRUE}
+
+# Define color scheme and order of categories for plotting
+
+plotting_colors = list(
+  pfdhfr = list(Sensitive = "#2f5496",
+                `Less sensitive` = "#8eaadb",
+                Triple ="#c55a11", 
+                Quadruple ="#cc0100" , 
+                `Polyclonal undetermined` = "#999999"),
+  pfdhps = list(Sensitive = "#2f5496",
+                `Less sensitive` = "#8eaadb",
+                Double ="#c55a11", 
+                Triple ="#cc0100" , 
+                `Polyclonal undetermined` = "#999999"),
+  `pfdhfr+pfdhps` = list(Sensitive = "#2f5496",
+                         `Less sensitive` = "#8eaadb",
+                         Quintuple ="#c55a11", 
+                         Sextuple ="#cc0100" , 
+                         `Polyclonal undetermined` = "#999999"),
+  `pfk13 P441L` = list(`Wild Type`= "blue",Mixed = "orange",Mutant = "red"),
+  `pfk13 P574L` = list(`Wild Type`= "blue",Mixed = "orange",Mutant = "red"),
+  `pfcrt K76T` = list(`Wild Type`= "blue",Mixed = "orange",Mutant = "red"),
+  `pfmdr1 N86Y` = list(`Wild Type`= "blue",Mixed = "orange",Mutant = "red"),
+  `Plasmodium species` = list(`P. falciparum` = "grey",
+                              `P. falciparum + P. ovale wallikeri`="salmon",
+                              `P. falciparum + P. ovale curtisi`="pink",
+                              `P. falciparum + P. malariae` = "lightgreen",
+                              `P. falciparum + P. vivax` = "blue")
+)
+
+
+# Make 1 panel with all SNPs of interest 
+# stacked proportions
+genomic_data %>%
+  select(`pfk13 P441L`:`pfmdr1 N86Y`) %>%
+  pivot_longer(cols= everything(),names_to = "marker", values_to = "genotype" ) %>%
+  table() %>%
+  as.tibble() %>%
+  group_by(marker) %>%
+  mutate(prev = round(n/sum(n),2)) %>%
+  ggplot(aes(x = marker, fill = factor(genotype,levels = c("Wild Type","Mixed","Mutant")), y = prev)) + 
+  geom_col(position = 'fill') +
+  labs(x= "SNP", y = "Prevalence")+
+  geom_text(aes(label = paste0(prev*100,"%"), y = prev), position = position_stack(vjust = 0.5), size = 3) +
+  #labs(fill = 'K13 Genotype', x = 'Province') +
+  scale_y_continuous(limits = c(0,1))+
+  scale_discrete_manual(values = unlist(plotting_colors$`pfk13 P441L`),aesthetics = c("colour", "fill"))+
+  theme_classic2()+
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        legend.title = element_blank())+
+  ggtitle(paste("Prevalence of resistance alleles, overall"))
+
+
+# Make 3 panels for S, P, and SP, side by side
+pall=list()
+for(genotype_name in genotypes_to_include[1:3]){
+  data_to_plot = genomic_data %>%
+    select(genotype_name) %>%
+    pivot_longer(cols= everything(),names_to = "marker", values_to = "genotype" ) %>%
+    table() %>%
+    as.tibble() %>%
+    group_by(marker) %>%
+    mutate(prev = round(n/sum(n),2)) %>%
+    ungroup() %>% 
+    mutate(genotype= factor(genotype,levels=names(plotting_colors[genotype_name][[1]]))) 
+  
+  p = ggplot(data_to_plot,aes(x = 1, fill = genotype, y = prev)) + 
+    geom_col(position = 'fill') +
+    labs(x= element_blank(), y = "Prevalence")+
+    geom_text(aes(label = paste0(prev*100,"%"), y = prev), position = position_stack(vjust = 0.5), size = 3) +
+    #labs(fill = 'K13 Genotype', x = 'Province') +
+    scale_y_continuous(limits = c(0,1))+
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    theme_classic2()+
+    theme(axis.text.x  = element_blank(),
+          legend.title = element_blank(),
+          legend.position = "bottom",
+          legend.direction = "vertical")+
+    ggtitle(paste("Prevalence of ", genotype_name ," genotypes, overall")) 
+  
+  pall[[genotype_name]]= p  
+}
+
+pall<-ggarrange(pall[[1]],pall[[2]],pall[[3]], nrow =1, ncol = 3, labels = c("a","b","c"))
+pall
+
+#Make 1 panel for non-falciparum species 
+genomic_data %>%
+  select(`Plasmodium species`) %>%
+  pivot_longer(cols= everything(),names_to = "marker", values_to = "genotype" ) %>%
+  table() %>%
+  as.tibble() %>%
+  group_by(marker) %>%
+  mutate(prev = round(n/sum(n),2)) %>%
+  ggplot(aes(x = 1, y=prev, fill = factor(genotype,levels = names(plotting_colors$`Plasmodium species`))))+ 
+  geom_col(position = "fill") +
+  labs(x= element_blank(), y = "Prevalence")+
+  geom_text(aes(label = paste0(prev*100,"%"), y = prev), position = position_stack(vjust = 0.5), size = 3) +
+  scale_discrete_manual(values = unlist(plotting_colors$`Plasmodium species`),aesthetics = c("colour", "fill"))+
+  #labs(fill = 'marker', x = 'Species') +
+  #geom_linerange( aes(x=name, ymin=value-sd, ymax=value+sd), colour="orange", alpha=0.9, size=1.3)
+  theme_classic2()+
+  theme(axis.text.x  = element_blank(),
+        legend.title = element_blank())+
+  ggtitle(paste("Prevalence of P. falciparum coinfections, overall"))
+
+
+# one panel for species
+# genomic_data %>%
+#  select(Species_Genotype) %>%
+#   pivot_longer(cols= everything(),names_to = "marker", values_to = "genotype" ) %>%
+#   table() %>%
+#   as.tibble() %>%
+#       ggplot(aes(x = genotype, y=n) )+ 
+#       geom_bar(stat = "identity") +
+#       labs(x= "Species", y = "Count")+
+#        theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+#       theme_classic2()+
+#       ggtitle(paste("Count of species genotypes, overall"))
+
+
+
+ci_table<-genomic_data %>%
+  select(pfdhps:`pfmdr1 N86Y`)  %>%
+  tbl_summary() %>%
+  add_ci(statistic = list(all_categorical() ~ "{conf.low}, {conf.high}",
+                          all_continuous() ~ "{conf.low}, {conf.high}"),
+         style_fun = list(all_categorical() ~ purrr::partial(style_sigfig, scale = 1), 
+                          all_continuous() ~ style_sigfig)
+  )  %>%
+  as_tibble()%>%
+  mutate(ci_2pt5 = str_extract(`**95% CI**`, "[^,]+"),
+         ci_97pt5 = str_extract(`**95% CI**`, "(?<=,).*")
+  )
+
+```
+
+Next, we will produce the following plots for each of S, P, SP, species and following SNP loci k13_441, k13_574 (Artemisinin), crt_76 (Chloroquine), mdr1_86 (Lumefantrine) :
+
+1.  Stacked barchart showing counts of samples by province (residents) and genotype/allele
+2.  Stacked barchart showing proportions (prevalence) of samples by province (residents) and genotype/allele
+3.  Stacked barchart showing the counts (prevalence) of samples by travel history
+4.  Stacked barchart showing the counts (prevalence) of samples by age group
+5.  Stacked barchart showing the counts (prevalence) of samples by health facility
+6.  Stacked barchart showing the counts (prevalence) of samples by gender
+
+```{r, warning=FALSE, error=FALSE, fig.width=10, fig.height=15, fig.fullwidth=TRUE}
+
+# Define a function to make all plots for a given genotype to plot
+plot_drprev<-function(genotype_name){
+  
+  
+  genotype_name_ggplot = ifelse(str_detect(genotype_name," |\\+"),paste0("`",genotype_name,"`"),genotype_name)
+  p<-
+    residents %>%
+    filter(!is.na(!!sym(genotype_name))) %>% 
+    ggplot(aes(x= province, 
+               fill = factor(!!sym(genotype_name),
+                             levels = names(plotting_colors[genotype_name][[1]])))) +
+    geom_bar()+
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    labs(fill = sub("_", " ",genotype_name_ggplot), x= "Province", y = "Count")+
+    theme_classic2()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.title = element_blank())+
+    ggtitle(paste("Count of ", sub("_", " ",genotype_name), "by Province"))
+  
+  
+  prev_table<- residents %>%
+    select(province, {{genotype_name}}) %>%
+    table()
+  
+  p2<- as_tibble(prev_table) %>%
+    select(province,{{genotype_name}},n) %>%
+    group_by(province) %>%
+    mutate(prev = round(n/sum(n),2)) %>%
+    ggplot(aes(x = province, fill = factor(!!sym(genotype_name),
+                                           levels = names(plotting_colors[genotype_name][[1]])), y = prev)) +
+    geom_col(position = 'fill') +
+    labs(fill = sub("_", " ",genotype_name_ggplot), x= "Province", y = "Prevalence")+
+    geom_text(aes(label = paste0(prev*100,"%"), y = prev), position = position_stack(vjust = 0.5), size = 3) +
+    #labs(fill = 'K13 Genotype', x = 'Province') +
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    theme_classic2()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.title = element_blank())+
+    ggtitle(paste("Prevalence of", sub("_", " ",genotype_name), "by Province"))
+  
+  p3<-  residents %>%
+    filter(!is.na(!!sym(genotype_name))) %>% 
+    ggplot(aes(x= travel_history, fill = factor(!!sym(genotype_name),
+                                                levels = names(plotting_colors[genotype_name][[1]])))) +
+    geom_bar()+
+    labs(fill = sub("_", " ",genotype_name), x= "Travel History", y = "Count")+
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    theme_classic2()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.title = element_blank())+
+    ggtitle(paste("Count of ", sub("_", " ",genotype_name), " by travel history"))
+  
+  p4<- residents %>%
+    filter(!is.na(!!sym(genotype_name))) %>% 
+    ggplot(aes(x= age,  fill = factor(!!sym(genotype_name),
+                                      levels = names(plotting_colors[genotype_name][[1]])))) +
+    geom_bar()+
+    labs(fill = sub("_", " ",genotype_name), x= "Age Group", y = " Count")+
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    theme_classic2()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.title = element_blank())+
+    ggtitle(paste("Count of ", sub("_", " ",genotype_name), " by age group"))
+  
+  p5 <- residents %>%
+    filter(!is.na(!!sym(genotype_name))) %>% 
+    ggplot(aes(x= health_facility, fill = factor(!!sym(genotype_name),
+                                                 levels = names(plotting_colors[genotype_name][[1]])))) +
+    geom_bar()+
+    labs(fill = sub("_", " ",genotype_name), x= "Health Facility", y = "Count")+
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    theme_classic2()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.title = element_blank())+
+    ggtitle(paste("Count of ", sub("_", " ",genotype_name), " by health facility"))
+  
+  p6<- residents %>%
+    filter(!is.na(!!sym(genotype_name))) %>% 
+    ggplot(aes(x= gender, fill = factor(!!sym(genotype_name),
+                                        levels = names(plotting_colors[genotype_name][[1]])))) +
+    geom_bar()+
+    labs(fill = sub("_", " ",genotype_name),  x= "Gender", y = "Count")+
+    scale_fill_manual(values = unlist(plotting_colors[genotype_name][[1]]),aesthetics = c("colour", "fill"))+
+    theme_classic2()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+          legend.title = element_blank())+
+    ggtitle(paste("Count of ", sub("_", " ",genotype_name), " by gender"))
+  
+  
+  #tiff(file = paste0(file.path(all_data_path,/R_code_DR_prev/",genotype_name,"_all.tiff"), height=8,width=12,units='in',res=1200)
+  p7<-ggarrange(p,p2,p3,p4,p5,p6, nrow =3, ncol = 2, labels = c("a","b","c","d", "e", "f"))
+  p7
+  #close file
+  # dev.off()
+  return(list(p7))
+}
+
+
+lapply(FUN=plot_drprev, X = genotypes_to_include)
+
+
+```
